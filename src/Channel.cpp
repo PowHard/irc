@@ -106,15 +106,15 @@ void Channel::sendAllChanExcept(std::string message, Client* exclude)
 
 bool Channel::isMember(Client* client)
 {
-    std::string nickName = client->getNickName();
-    std::map<std::string, Client*>::iterator it = members.find(nickName);
-    return (it != members.end());
+	std::string nickName = client->getNickName();
+	std::map<std::string, Client*>::iterator it = members.find(nickName);
+	return (it != members.end());
 }
 
 bool Channel::isOperator(Client* client)
 {
 	std::string nickName = client->getNickName();
-    std::map<std::string, Client*>::iterator it = operators.find(nickName);
+	std::map<std::string, Client*>::iterator it = operators.find(nickName);
 	return (it != operators.end());
 }
 
@@ -127,8 +127,12 @@ void Channel::removeMember(Client* client)
 		this->nbMember--;
 		this->members.erase(it);
 	}
+
+	// Remove from operator map if member is one, leaving a zombie chan if it was the last.
 	std::map<std::string, Client*>::iterator itOp;
 	itOp = operators.find(client->getNickName());
+	if (itOp != operators.end())
+		operators.erase(itOp);
 }
 
 bool Channel::chanIsEmpty()
@@ -146,8 +150,8 @@ void Channel::addInvited(Client* client)
 void Channel::removeInvited(Client* client)
 {
 	std::map<std::string, Client*>::iterator it = invited.find(client->getNickName());
-    if (it != invited.end())
-        invited.erase(it);
+	if (it != invited.end())
+		invited.erase(it);
 }
 
 /**

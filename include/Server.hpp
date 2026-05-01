@@ -46,6 +46,8 @@ class Server
 		void		quitAllChan(Client* client, std::string reason);
 		void		setupSignal();
 		void		freeAll();
+		void		sendLinkedClients(std::string message, Client* client);
+		void		updateChanMember(std::string newNick, Client* client);
 };
 
 

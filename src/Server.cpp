@@ -29,6 +29,12 @@ std::string Server::getPassword() const
 
 /**
  * @brief Create a server fd and initialize poll/sockaddr struct
+ * @param setsockopt set socket option
+ * 
+ * \li - SOL_SOCKET: Socket level, the scope is only the current socket
+ * 
+ * \li - SO_REUSEADDR: Give the permission to use the same adresse again and again for one port. 
+ * 
  * @param fcntl open fd and configure it:
  * 
  * \li - F_SETFL: Set File Status Flags, overwrites actual flags
@@ -57,6 +63,13 @@ void Server::initServer()
 		std::cerr << "Error: problem when creating socket" << std::endl;
 
 	fcntl(this->socketFd, F_SETFL, O_NONBLOCK);
+	int reuse = 1;
+	if (setsockopt(this->socketFd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0) 
+	{
+		std::cerr << "Error setsockopt(SO_REUSEADDR): " << std::endl;
+		close(this->socketFd);
+		exit(EXIT_FAILURE);
+	}
 	this->serverAddr.sin_family = AF_INET;
 	this->serverAddr.sin_port = htons(this->port);
 	this->serverAddr.sin_addr.s_addr = INADDR_ANY;
@@ -232,6 +245,8 @@ void Server::disconnectClient(int clientFd)
 		return;
 	
 	Client* client = it->second;
+	
+	quitAllChan(client, "Client disconnected");
 	delete client;
 	clients.erase(it);
 	close(clientFd);
@@ -260,9 +275,9 @@ void Server::quitAllChan(Client* client, std::string reason)
 		if (channel->isMember(client))
 		{
 			std::string quitMsg = ":" + client->getNickName() + "!"
-                                + client->getUser() + "@"
-                                + client->getHostname()
-                                + " QUIT :" + reason + "\r\n";
+								+ client->getUser() + "@"
+								+ client->getHostname()
+								+ " QUIT :" + reason + "\r\n";
 			channel->sendAllChanExcept(quitMsg, client);
 			channel->removeMember(client);
 			if (channel->chanIsEmpty())
@@ -334,4 +349,90 @@ void Server::freeAll()
 		socketFd = -1; // Secure socket close
 	}
 	pollFd.clear();
+}
+
+/**
+ * @brief Send a message to all the clients who share a channel with a client
+ * @param buffer The message to send
+ * @param client The pointer of the client
+ */
+// void Server::sendLinkedClients(std::string buffer, Client* client)
+// {
+// 	std::map<std::string, Client*> linkedClients;
+// 	std::map<std::string, Client*>::iterator itLinked;
+// 	std::map<std::string, Channel*>::iterator itChannels;
+
+// 	itChannels = this->channels.begin();
+// 	while (itChannels != this->channels.end())
+// 	{
+// 		Channel* channel = itChannels->second;
+// 		std::map<std::string, Channel*>::iterator current = itChannels;
+// 		itChannels++;
+// 		if (channel->isMember(client))
+// 		{
+			
+// 		}
+// 	}
+// }
+
+void Server::sendLinkedClients(std::string message, Client* client)
+{
+	std::map<std::string, Client*> linkedClients;
+	std::map<std::string, Client*>::iterator itLinked;
+	std::map<std::string, Channel*>::iterator itChannels;
+
+	itChannels = this->channels.begin();
+	while (itChannels != this->channels.end())
+	{
+		Channel* channel = itChannels->second;
+		if (channel->isMember(client))
+		{
+			std::map<std::string, Client*>& channelClients = channel->getMembers();
+			std::map<std::string, Client*>::iterator itClients;
+			itClients = channelClients.begin();
+			while (itClients != channelClients.end())
+			{
+				Client* currentClient = itClients->second;
+				if (currentClient != client)
+					linkedClients[currentClient->getNickName()] = currentClient;
+				++itClients;
+			}
+		}
+		++itChannels;
+	}
+	itLinked = linkedClients.begin();
+	while (itLinked != linkedClients.end())
+	{
+		send(itLinked->second->getFd(), message.c_str(), message.length(), 0);
+		++itLinked;
+	}
+}
+
+void Server::updateChanMember(std::string newNick, Client* client)
+{
+	std::map<std::string, Channel*>::iterator itChannels;
+
+	itChannels = this->channels.begin();
+	while (itChannels != this->channels.end())
+	{
+		Channel* channel = itChannels->second;
+		if (channel->isMember(client))
+		{
+			std::map<std::string, Client*>& channelClients = channel->getMembers();
+			std::map<std::string, Client*>::iterator itClients;
+			itClients = channelClients.begin();
+			while (itClients != channelClients.end())
+			{
+				Client* currentClient = itClients->second;
+				if (currentClient == client)
+				{
+					channelClients.erase(itClients);
+					channelClients[newNick] = client;
+					break;
+				}
+				++itClients;
+			}
+		}
+		++itChannels;
+	}
 }

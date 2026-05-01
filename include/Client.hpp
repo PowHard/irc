@@ -21,6 +21,7 @@ class Client
 		bool	isRegistered; // Pass -> Nick -> User
 		int 		clientFd;
 		bool	willDisconnect;
+		bool	isWelcomed;
 
 	public:
 	
@@ -41,6 +42,7 @@ class Client
 		bool getIsUser() const;
 		bool getWillDisconnect() const;
 		std::string getStringFd() const;
+		bool getIsWelcomed() const;
 
 		// setters
 		void setRealName(const std::string& real);
@@ -53,6 +55,7 @@ class Client
 		void setIsNick(bool nick_registered);
 		void setIsUser(bool user_registered);
 		void setWillDisconnect(bool state);
+		void setIsWelcomed(bool welcome);
 
 };
 

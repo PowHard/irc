@@ -8,13 +8,9 @@ Command::Command() : server(NULL)
 	set_map();
 }
 
-Command::Command(const Command& c) : CommandMap(c.CommandMap) 
-{
-}
+Command::Command(const Command& c) : CommandMap(c.CommandMap) {}
 
-Command::~Command()
-{
-}
+Command::~Command() {}
 
 Command& Command::operator=(const Command& c)
 {
@@ -111,6 +107,7 @@ void Command::prepareCommand(Client* client, std::string line)
 void Command::extractCompleteCommand(Client* client)
 {
 	std::string& buffer = client->getBuffer();
+	//std::cout << "buffer: " << buffer << std::endl; //For defense purpose
 	size_t pos;
 	while ((pos = buffer.find("\r\n")) != std::string::npos)
 	{
@@ -194,7 +191,7 @@ void Command::sendErrorCode(Client* client, ErrorCode errorCode, std::string err
 			error << client->getNickName() << " " << errorMsg << " :Cannot join channel (+i)";
 			break;
 		case ERR_BADCHANNELKEY: // "<client> <channel> :Cannot join channel (+k)"
-			error << client->getNickName() << " " << errorMsg << " :Cannot join channel (+k)";
+			error << client->getNickName() << " " << errorMsg << " :Cannot join channel (+k), bad channel key";
 			break;
 		case ERR_BADCHANMASK: // "<client> <channel> :Bad Channel Mask"
 			error << client->getNickName() << " " << errorMsg << " :Bad Channel Mask. Usage is /JOIN {#,!,&,+}{<channelname1>,<channelname2,...} {channelkey1,channelkey2,...}.";
@@ -269,14 +266,20 @@ void Command::nick(Client* client, std::string buffer)
 		sendErrorCode(client, ERR_ERRONEUSNICKNAME, "");
 		return ;
 	}
-	std::string message = client->getNickName() + " changed his nickname to " + buffer + ".\r\n";
+	std::string message = ":" + client->getNickName() + "!" + client->getUser() + "@localhost NICK :" + buffer + "\r\n";
+	this->server->updateChanMember(buffer, client);
 	client->setNickName(buffer);
 	client->setIsNick(true);
 	send(client->getFd(), message.c_str(), message.length(), 0);
+	this->server->sendLinkedClients(message, client);
 	if (client->getIsUser())
 	{
 		client->setIsRegistered(true);
-		sendWelcome(client);
+		if(!(client->getIsWelcomed()))
+		{
+			client->setIsWelcomed(true);
+			sendWelcome(client);
+		}
 	}
 }
 
@@ -329,7 +332,11 @@ void Command::user(Client* client, std::string buffer)
 	if (client->getIsNick())
 	{
 		client->setIsRegistered(true);
-		sendWelcome(client);
+		if(!(client->getIsWelcomed()))
+		{
+			client->setIsWelcomed(true);
+			sendWelcome(client);
+		}
 	}
 }
 
@@ -364,16 +371,6 @@ void	Command::join(Client* client, std::string buffer)
 		std::string keyS;
 		while (std::getline(keySS, keyS, ','))
 			keyV.push_back(keyS);
-	}
-	
-	for (size_t i = 0; i < channelV.size(); i++)
-		std::cout << "channel: " << channelV[i] << std::endl;
-	for (size_t i = 0; i < keyV.size(); i++)
-		std::cout << "key: " << keyV[i] << std::endl;
-	if (keyV.size() > channelV.size())
-	{
-		sendErrorCode(client, ERR_BADCHANNELKEY, "EMPTY_CHAN_NAME");
-		return;
 	}
 
 	for (size_t i = 0; i < channelV.size(); i++)
@@ -460,13 +457,13 @@ void Command::who(Client* client, std::string buffer)
 void Command::privmsg(Client* client, std::string buffer)
 {
 	std::stringstream ss(buffer);
-	std::string target;
+	std::string targetsStr;
 	std::string message;
 
-	ss >> target;
+	ss >> targetsStr;
 	std::getline(ss, message);
 
-	if (target.empty() || message.empty())
+	if (targetsStr.empty() || message.empty())
 	{
 		sendErrorCode(client, ERR_NEEDMOREPARAMS, "PRIVMSG");
 		return;
@@ -481,36 +478,51 @@ void Command::privmsg(Client* client, std::string buffer)
 		return;
 	}
 
-	std::string ircMsg = ":" + client->getNickName() + "!"
-					   + client->getUser() + "@"
-					   + client->getHostname()
-					   + " PRIVMSG " + target
-					   + " :" + message + "\r\n";
-
-	if (target[0] == '#' || target[0] == '&' || target[0] == '!' || target[0] == '+') // PRIVMSG to #channel
+	// Multiple PRIVMSG target handling (<target1>,<target2>)
+	std::vector<std::string> targets;
+	std::stringstream targetsSS(targetsStr);
+	std::string singleTarget;
+	while (std::getline(targetsSS, singleTarget, ','))
 	{
-		Channel* channel = server->findChannel(target);
-		if (channel == NULL)
-		{
-			sendErrorCode(client, ERR_NOSUCHCHANNEL, target);
-			return;
-		}
-		if (!channel->isMember(client))
-		{
-			sendErrorCode(client, ERR_CANNOTSENDTOCHAN, target);
-			return;
-		}
-		channel->sendAllChanExcept(ircMsg, client);
+		if (!singleTarget.empty())
+			targets.push_back(singleTarget);
 	}
-	else // PRIVMSG to user
+
+	for (size_t i = 0; i < targets.size(); i++)
 	{
-		Client* targetClient = server->findClientByNick(target);
-		if (targetClient == NULL)
+		std::string target = targets[i];
+	
+		std::string ircMsg = ":" + client->getNickName() + "!"
+						   + client->getUser() + "@"
+						   + client->getHostname()
+						   + " PRIVMSG " + target
+						   + " :" + message + "\r\n";
+
+		if (target[0] == '#' || target[0] == '&' || target[0] == '!' || target[0] == '+') // PRIVMSG to current #channel
 		{
-			sendErrorCode(client, ERR_NOSUCHNICK, target);
-			return;
+			Channel* channel = server->findChannel(target);
+			if (channel == NULL)
+			{
+				sendErrorCode(client, ERR_NOSUCHCHANNEL, target);
+				continue;
+			}
+			if (!channel->isMember(client))
+			{
+				sendErrorCode(client, ERR_CANNOTSENDTOCHAN, target);
+				continue;
+			}
+			channel->sendAllChanExcept(ircMsg, client);
 		}
-		send(targetClient->getFd(), ircMsg.c_str(), ircMsg.length(), 0);
+		else // PRIVMSG to current user
+		{
+			Client* targetClient = server->findClientByNick(target);
+			if (targetClient == NULL)
+			{
+				sendErrorCode(client, ERR_NOSUCHNICK, target);
+				continue;
+			}
+			send(targetClient->getFd(), ircMsg.c_str(), ircMsg.length(), 0);
+		}
 	}
 }
 
@@ -762,6 +774,11 @@ void Command::mode(Client* client, std::string buffer)
 		sendErrorCode(client, ERR_NEEDMOREPARAMS, "MODE");
 		return;
 	}
+	if (channelName[0] != '#' && channelName[0] != '&' && channelName[0] != '!' && channelName[0] != '+')
+	{
+		sendErrorCode(client, ERR_NOSUCHCHANNEL, channelName);
+		return;
+	}
 
 	Channel* channel = server->findChannel(channelName);
 
@@ -777,13 +794,22 @@ void Command::mode(Client* client, std::string buffer)
 	}
 
 	ss >> modeString;
+	
+	if (modeString.empty() || (modeString[0] != '+' && modeString[0] != '-'))
+	{
+		sendErrorCode(client, ERR_UNKNOWNMODE, modeString);
+		return;
+	}
+
 	std::string param;
 
 	while (ss >> param)
 		modeParams.push_back(param);
 	if (!validateModePermissions(client, channel, channelName))
+	{
+		sendErrorCode(client, ERR_CHANOPRIVSNEEDED, "");
 		return;
-
+	}
 	bool adding = true;
 	size_t paramIndex = 0;
 	std::string appliedModes = "";
@@ -1057,14 +1083,14 @@ void Command::topic(Client* client, std::string buffer)
 		{
 			// RPL_NOTOPIC 331
 			std::string msg = ":ft_irc 331 " + client->getNickName()
-			                + " " + channelName + " :No topic is set\r\n";
+							+ " " + channelName + " :No topic is set\r\n";
 			send(client->getFd(), msg.c_str(), msg.size(), 0);
 		}
 		else
 		{
 			// RPL_TOPIC 332
 			std::string msg = ":ft_irc 332 " + client->getNickName()
-			                + " " + channelName + " :" + currentTopic + "\r\n";
+							+ " " + channelName + " :" + currentTopic + "\r\n";
 			send(client->getFd(), msg.c_str(), msg.size(), 0);
 		}
 		return;
@@ -1081,10 +1107,10 @@ void Command::topic(Client* client, std::string buffer)
 	channel->setTopic(newTopic);
 
 	std::string topicMsg = ":" + client->getNickName() + "!"
-	                     + client->getUser() + "@"
-	                     + client->getHostname()
-	                     + " TOPIC " + channelName
-	                     + " :" + newTopic + "\r\n";
+						 + client->getUser() + "@"
+						 + client->getHostname()
+						 + " TOPIC " + channelName
+						 + " :" + newTopic + "\r\n";
 
 	channel->sendAllChanExcept(topicMsg, NULL);
 }
